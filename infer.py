@@ -1,6 +1,7 @@
 import torch
 from key_encoder import Encoder as Encoder_ver1
 from key_encoder_ver2 import Encoder as Encoder_ver2
+from key_encoder_ver2 import STEM
 
 import time
 

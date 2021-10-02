@@ -1,6 +1,8 @@
 import torch
+import torch.nn.functional as F
 from torch import nn
-from torch.nn.modules.conv import Conv2d
+
+import mod_resnet
 
 # input size: 256x256x3
 
@@ -23,89 +25,94 @@ class Conv3x3(nn.Module):   # Bottleneck 3x3
         return out
 
 
+# ---------- From STCN ---------- #
 class ResBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1, padding=0):
+    def __init__(self, indim, outdim=None):
         super(ResBlock, self).__init__()
-
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=padding)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=stride, padding=padding)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-
-        self.relu = nn.ReLU(inplace=True)
-
-        self.is_channelchanged = False
-        if (in_channels != out_channels):
-            self.is_channelchanged = True
-
-    def forward(self, x):
-        if (self.is_channelchanged):
-            channel_scaling = nn.Conv2d(in_channels=self.in_channels, out_channels=self.out_channels, kernel_size=1)
-            residual = channel_scaling(x)
+        if outdim == None:
+            outdim = indim
+        if indim == outdim:
+            self.downsample = None
         else:
-            residual = x
+            self.downsample = nn.Conv2d(indim, outdim, kernel_size=3, padding=1)
+ 
+        self.conv1 = nn.Conv2d(indim, outdim, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(outdim, outdim, kernel_size=3, padding=1)
+ 
+    def forward(self, x):
+        r = self.conv1(F.relu(x))
+        r = self.conv2(F.relu(r))
         
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
+        if self.downsample is not None:
+            x = self.downsample(x)
 
-        out = self.conv2(out)
-        out = self.bn2(out)
-
-        out += residual
-        out = self.relu(out)
-
-        return out
+        return x + r
 
 
-class STEM(nn.Module):      # 256x256x3 -> 128x128x64
+class UpsampleBlock(nn.Module):
+    def __init__(self, skip_c, up_c, out_c, scale_factor=2):
+        super().__init__()
+        self.skip_conv = nn.Conv2d(skip_c, up_c, kernel_size=3, padding=1)
+        self.out_conv = ResBlock(up_c, out_c)
+        self.scale_factor = scale_factor
+
+    def forward(self, skip_f, up_f):
+        x = self.skip_conv(skip_f)
+        x = x + F.interpolate(up_f, scale_factor=self.scale_factor, mode='bilinear', align_corners=False)
+        x = self.out_conv(x)
+        return x
+# ---------- From STCN ---------- #
+
+
+class STEM(nn.Module):      # Sten network based on ResNet / 256x256x3 -> 64x64x256
     def __init__(self):
         super().__init__()
 
-        self.res1 = ResBlock(3, 16, padding=1)
-        self.res2 = ResBlock(16, 32, padding=1)
-        self.res3 = ResBlock(32, 64, padding=1)
+        resnet18 = mod_resnet.resnet18()
+        
+        self.conv1 = resnet18.conv1
+        self.bn1 = resnet18.bn1
+        self.relu = resnet18.relu
+        self.maxpool = resnet18.maxpool
 
-        self.avgpool = nn.AvgPool2d(kernel_size=2)
+        self.layer1 = resnet18.layer1
+        self.layer2 = resnet18.layer2
+        self.layer3 = resnet18.layer3
 
-    def forward(self, x):
-        out = self.res1(x)
-        out = self.res2(out)
-        out = self.res3(out)
+        self.up1 = UpsampleBlock(128, 256, 256)
+        self.up2 = UpsampleBlock(64, 256, 256)
 
-        out = self.avgpool(out)
+    def forward(self, x):       # x: 256x256x3
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)     # x: 64x64x64
+
+        f1 = self.layer1(x)     # f1: 64x64x64
+        f2 = self.layer2(f1)    # f2: 32x32x128
+        f3 = self.layer3(f2)    # f3: 16x16x256
+
+        out = self.up1(f2, f3)      # out = f2 + f3 (upsampling and skip connection)
+        out = self.up2(f1, out)     # out = f1 + out (upsampling and skip connection)
 
         return out
+        
 
-
-class Encoder(nn.Module):   # 128x128x64 -> 64x64x32
+class Encoder(nn.Module):   # 64x64x256 -> 64x64x32
     def __init__(self):
         super().__init__()
 
         self.stem = STEM()
 
-        self.conv1 = Conv3x3(64, 128, padding=1)
-        self.bn1 = nn.BatchNorm2d(128)
+        self.conv1 = Conv3x3(256, 256, padding=1)
+        self.bn1 = nn.BatchNorm2d(256)
 
-        self.conv2 = Conv3x3(128, 256, padding=1)
+        self.conv2 = Conv3x3(256, 256, padding=1)
         self.bn2 = nn.BatchNorm2d(256)
 
-        self.conv3 = Conv3x3(256, 256, padding=1)
-        self.bn3 = nn.BatchNorm2d(256)
-
-        self.conv4 = Conv3x3(256, 256, padding=1)
-        self.bn4 = nn.BatchNorm2d(256)
-
-        self.conv5 = nn.Conv2d(256, 32, kernel_size=3, padding=1)
-        self.bn5 = nn.BatchNorm2d(32)
+        self.conv3 = nn.Conv2d(256, 32, kernel_size=3, padding=1)
     
         self.relu = nn.ReLU(inplace=True)
-
-        self.avgpool = nn.AvgPool2d(kernel_size=2)
 
     def forward(self, x):
         out = self.stem(x)
@@ -119,17 +126,5 @@ class Encoder(nn.Module):   # 128x128x64 -> 64x64x32
         out = self.relu(out)
 
         out = self.conv3(out)
-        out = self.bn3(out)
-        out = self.relu(out)
-
-        out = self.conv4(out)
-        out = self.bn4(out)
-        out = self.relu(out)
-
-        out = self.conv5(out)
-        out = self.bn5(out)
-        out = self.relu(out)
-
-        out = self.avgpool(out)
 
         return out

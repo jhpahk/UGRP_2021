@@ -26,7 +26,7 @@ class Conv3x3(nn.Module):   # Bottleneck 3x3
         return out
 
 
-class Encoder_1x1(nn.Module):
+class Encoder_1x1(nn.Module):   # Assume input size is 1x1x256
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(256, 4, kernel_size=1)
