@@ -2,6 +2,8 @@ import torch
 import torch.nn.functional as F
 from torchvision.transforms.functional import crop
 
+import numpy as np
+
 t1 = torch.rand(1, 2, 2, 2)
 t2 = torch.rand(1, 2, 2, 2)
 
@@ -37,3 +39,9 @@ t6 = torch.rand(1, 64, 64)
 print('\n', t6.shape)
 t6 = t6.unsqueeze(0)
 print('\n', t6.shape)
+
+t7 = torch.rand(1, 1, 10)
+t8 = torch.rand(1, 1, 10)
+print(torch.norm(t8 - t7))
+
+print(3 // 1.3)
